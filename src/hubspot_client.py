@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from collections import Counter
 from typing import Any
 
 import pandas as pd
@@ -70,44 +71,72 @@ class HubSpotClient:
 
     def email_event_totals(self, email: dict[str, Any]) -> dict[str, int]:
         totals = {"opens": 0, "clicks": 0}
-        if not self.use_legacy_events:
-            return totals
+        totals["opens"] = self.email_event_count(email, "OPEN")
+        totals["clicks"] = self.email_event_count(email, "CLICK")
+        return totals
 
+    def email_event_count(self, email: dict[str, Any], event_type: str) -> int:
+        if not self.use_legacy_events:
+            return 0
+
+        total = 0
         for campaign_id in self.email_campaign_ids(email):
-            if not campaign_id.isdigit():
-                self.event_warnings.append(
-                    f"Skipped non-numeric campaign ID {self.safe_id(campaign_id)} for legacy events endpoint."
-                )
-                continue
             try:
-                totals["opens"] += self._count_total_events(campaign_id, "OPEN")
-                totals["clicks"] += self._count_total_events(campaign_id, "CLICK")
+                total += self._count_total_events(campaign_id, event_type)
             except HubSpotClientAuthError as error:
                 self.event_warnings.append(str(error))
-                return totals
+                return total
             except HubSpotClientError as error:
                 self.event_warnings.append(
                     f"Legacy email events lookup skipped for campaign ID {self.safe_id(campaign_id)}: {error}"
                 )
-                return totals
-        return totals
+                return total
+        return total
+
+    def email_link_click_totals(self, email: dict[str, Any]) -> list[dict[str, Any]]:
+        if not self.use_legacy_events:
+            return []
+
+        link_counts: Counter[str] = Counter()
+        for campaign_id in self.email_campaign_ids(email):
+            try:
+                for event in self._filtered_events(campaign_id, "CLICK"):
+                    url = str(event.get("url") or "").strip()
+                    if url:
+                        link_counts[url] += 1
+            except HubSpotClientAuthError as error:
+                self.event_warnings.append(str(error))
+                return []
+            except HubSpotClientError as error:
+                self.event_warnings.append(
+                    f"Link click lookup skipped for campaign ID {self.safe_id(campaign_id)}: {error}"
+                )
+                return []
+
+        return [
+            {"link": link, "clicks": clicks}
+            for link, clicks in link_counts.most_common()
+        ]
 
     def _count_total_events(self, campaign_id: str, event_type: str) -> int:
+        return sum(1 for _ in self._filtered_events(campaign_id, event_type))
+
+    def _filtered_events(self, campaign_id: str, event_type: str) -> list[dict[str, Any]]:
         params: dict[str, Any] = {
             "limit": 1000,
             "campaignId": campaign_id,
             "eventType": event_type,
         }
-        total = 0
+        events: list[dict[str, Any]] = []
 
         while True:
             payload = self._get_json(self.EMAIL_EVENTS_PATH, params=params)
             for event in payload.get("events", []):
                 if event.get("filteredEvent") is False:
-                    total += 1
+                    events.append(event)
 
             if not payload.get("hasMore"):
-                return total
+                return events
             params["offset"] = payload.get("offset")
 
     def _get_json(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
