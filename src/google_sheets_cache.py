@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import ast
 import json
 from pathlib import Path
+from collections.abc import Mapping
 
 import pandas as pd
 
@@ -176,12 +178,26 @@ def _client(settings: GoogleSheetsCacheSettings):
 
 def _credentials(settings: GoogleSheetsCacheSettings) -> dict | None:
     if settings.service_account_json:
+        if isinstance(settings.service_account_json, Mapping):
+            return dict(settings.service_account_json)
+
+        raw_json = str(settings.service_account_json).strip()
         try:
-            return json.loads(settings.service_account_json)
-        except json.JSONDecodeError as error:
+            return json.loads(raw_json)
+        except json.JSONDecodeError:
+            try:
+                parsed = ast.literal_eval(raw_json)
+            except (SyntaxError, ValueError) as error:
+                raise GoogleSheetsCacheError(
+                    "GOOGLE_SERVICE_ACCOUNT_JSON is not valid JSON. "
+                    "Paste the full service account JSON as one TOML multiline string, "
+                    "or use a [GOOGLE_SERVICE_ACCOUNT_JSON] secrets table."
+                ) from error
+            if isinstance(parsed, Mapping):
+                return dict(parsed)
             raise GoogleSheetsCacheError(
-                "GOOGLE_SERVICE_ACCOUNT_JSON is not valid JSON."
-            ) from error
+                "GOOGLE_SERVICE_ACCOUNT_JSON parsed, but it is not a service account object."
+            )
 
     if not settings.service_account_file:
         return None

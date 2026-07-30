@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from typing import Any
 
 import streamlit as st
 
@@ -13,7 +14,7 @@ class GoogleSheetsCacheSettings:
     emails_worksheet: str
     links_worksheet: str
     service_account_file: str
-    service_account_json: str
+    service_account_json: Any
 
 
 @dataclass(frozen=True)
@@ -40,6 +41,16 @@ def _secret_or_env(name: str, default: str = "") -> str:
     return str(value or os.getenv(name, default)).strip()
 
 
+def _secret_or_env_raw(name: str, default: Any = "") -> Any:
+    try:
+        value = st.secrets.get(name, None)
+    except Exception:
+        value = None
+    if value not in (None, ""):
+        return value
+    return os.getenv(name, default)
+
+
 def _secret_or_env_bool(name: str, default: bool = False) -> bool:
     value = _secret_or_env(name, str(default))
     return value.lower() in {"1", "true", "yes", "on"}
@@ -55,7 +66,7 @@ def load_settings() -> HubSpotSettings:
             "GOOGLE_SERVICE_ACCOUNT_FILE",
             "stable-hologram-497015-i9-45282bfa717e.json",
         ),
-        service_account_json=_secret_or_env("GOOGLE_SERVICE_ACCOUNT_JSON"),
+        service_account_json=_secret_or_env_raw("GOOGLE_SERVICE_ACCOUNT_JSON"),
     )
     return HubSpotSettings(
         primary_token=_secret_or_env("HUBSPOT_PRIVATE_APP_TOKEN"),
