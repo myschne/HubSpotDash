@@ -239,6 +239,7 @@ def fetch_live_data(
         ).to_dict(orient="records")
 
     frame = add_derived_metrics(pd.DataFrame(rows))
+    frame = frame[pd.to_numeric(frame["delivered"], errors="coerce").fillna(0) > 0].copy()
     link_frame = pd.DataFrame(link_rows)
     if not link_frame.empty and "link" in link_frame.columns:
         link_frame["article_or_site"] = link_frame["link"].map(article_or_site_name)
@@ -657,6 +658,7 @@ if frame.empty:
     st.stop()
 
 frame = add_derived_metrics(frame)
+frame = frame[pd.to_numeric(frame["delivered"], errors="coerce").fillna(0) > 0].copy()
 if "preview_text" not in frame.columns:
     frame["preview_text"] = ""
 frame["preview_text"] = frame["preview_text"].map(clean_display_text)
@@ -696,6 +698,10 @@ if not link_frame.empty:
         & (link_frame["send_date"].dt.date <= end_date)
         & (link_frame["email_type"].isin(selected_types))
     ].copy()
+    if "email_id" in filtered_links.columns and "email_id" in filtered.columns:
+        filtered_links = filtered_links[
+            filtered_links["email_id"].astype(str).isin(filtered["email_id"].astype(str))
+        ].copy()
 else:
     filtered_links = pd.DataFrame()
 
