@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta
+import ast
 
 import altair as alt
 import pandas as pd
@@ -61,6 +62,34 @@ def default_date_range(period_label: str) -> tuple[date, date]:
         "Year to date": max(1, (end_date - date(end_date.year, 1, 1)).days + 1),
     }[period_label]
     return end_date - timedelta(days=days - 1), end_date
+
+
+def clean_display_text(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, dict):
+        body = value.get("body")
+        if isinstance(body, dict):
+            return clean_display_text(value.get("value") or body.get("value"))
+        return clean_display_text(value.get("value") or body)
+    text = str(value).strip()
+    if not text or text.lower() in {"nan", "none", "null"}:
+        return ""
+    if text.startswith("{") and text.endswith("}"):
+        try:
+            parsed = ast.literal_eval(text)
+        except (SyntaxError, ValueError):
+            parsed = None
+        if isinstance(parsed, dict):
+            return clean_display_text(parsed)
+    return " ".join(text.split())
+
+
+def truncate_text(value: object, limit: int = 140) -> str:
+    text = clean_display_text(value)
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3].rstrip() + "..."
 
 
 def cache_file_version(path) -> tuple[bool, int, int]:
@@ -364,6 +393,22 @@ def build_keyword_summary_cache(email_frame: pd.DataFrame, link_frame: pd.DataFr
     )
 
 
+def trend_rollup(frame: pd.DataFrame, frequency: str) -> pd.DataFrame:
+    if frame.empty:
+        return pd.DataFrame()
+
+    trend = (
+        frame.dropna(subset=["send_date"])
+        .set_index("send_date")
+        .groupby(pd.Grouper(freq=frequency))[["delivered", "opens", "clicks"]]
+        .sum()
+        .reset_index()
+    )
+    trend = trend[trend[["delivered", "opens", "clicks"]].sum(axis=1) > 0].copy()
+    trend = add_derived_metrics(trend)
+    return trend
+
+
 def build_email_records(
     client: HubSpotClient,
     email: dict,
@@ -425,13 +470,12 @@ def build_email_records(
 
         email_type = classify_email(merged)
         send_date_text = email_date.isoformat() if email_date else ""
-        subject = str(client.first_value(merged, ["subject", "emailSubject"]) or "")
-        preview_text = str(
+        subject = clean_display_text(client.first_value(merged, ["subject", "emailSubject"]))
+        preview_text = clean_display_text(
             client.first_value(
                 merged,
                 ["previewText", "preview_text", "preheader", "preheaderText"],
             )
-            or ""
         )
         summary_row = {
             "email_id": email_id,
@@ -615,6 +659,9 @@ if frame.empty:
 frame = add_derived_metrics(frame)
 if "preview_text" not in frame.columns:
     frame["preview_text"] = ""
+frame["preview_text"] = frame["preview_text"].map(clean_display_text)
+if "subject" in frame.columns:
+    frame["subject"] = frame["subject"].map(clean_display_text)
 frame["send_date"] = pd.to_datetime(frame["send_date"], errors="coerce")
 filtered = frame[
     (frame["send_date"].dt.date >= start_date)
@@ -629,8 +676,16 @@ if not link_frame.empty:
         link_frame["is_advanced_manufacturing"] = link_frame["link"].map(
             is_advanced_manufacturing_link
         )
+    if "clicks" not in link_frame.columns:
+        link_frame["clicks"] = 0
+    link_frame["clicks"] = pd.to_numeric(link_frame["clicks"], errors="coerce").fillna(0).astype(int)
     if "position" not in link_frame.columns:
         link_frame["position"] = ""
+    link_frame["position"] = pd.to_numeric(link_frame["position"], errors="coerce")
+    link_frame.loc[
+        (link_frame["position"] < 1) | (link_frame["position"] > 100),
+        "position",
+    ] = pd.NA
     if "title" not in link_frame.columns:
         link_frame["title"] = link_frame.get("article_or_site", "")
     if "blurb" not in link_frame.columns:
@@ -675,15 +730,95 @@ with tab_overview:
         st.bar_chart(by_type.set_index("email_type")[["ctr"]])
 
 with tab_trends:
-    trend = (
-        filtered.dropna(subset=["send_date"])
-        .assign(day=lambda data: data["send_date"].dt.date)
-        .groupby("day")[["delivered", "opens", "clicks"]]
-        .sum()
-        .reset_index()
-    )
-    st.subheader("Daily Trend")
-    st.line_chart(trend.set_index("day")[["delivered", "opens", "clicks"]])
+    daily_trend = trend_rollup(filtered, "D")
+    weekly_trend = trend_rollup(filtered, "W-SAT")
+    monthly_trend = trend_rollup(filtered, "MS")
+
+    trend_tabs = st.tabs(["Daily", "Weekly", "Monthly"])
+    for trend_tab, label, trend_frame in [
+        (trend_tabs[0], "Daily", daily_trend),
+        (trend_tabs[1], "Weekly", weekly_trend),
+        (trend_tabs[2], "Monthly", monthly_trend),
+    ]:
+        with trend_tab:
+            if trend_frame.empty:
+                st.info(f"No {label.lower()} trend data is available for the selected filters.")
+                continue
+
+            period_column = {
+                "Daily": "Day",
+                "Weekly": "Week Ending",
+                "Monthly": "Month",
+            }[label]
+            display_frame = trend_frame.rename(columns={"send_date": period_column}).copy()
+            display_frame["period_sort"] = display_frame[period_column]
+            if label == "Monthly":
+                display_frame["Period"] = display_frame[period_column].dt.strftime("%b %Y")
+            else:
+                display_frame["Period"] = display_frame[period_column].dt.strftime("%Y-%m-%d")
+
+            st.subheader(f"{label} Volume Trend")
+            volume_chart = (
+                alt.Chart(
+                    display_frame.melt(
+                        id_vars=["Period", "period_sort"],
+                        value_vars=["delivered", "opens", "clicks"],
+                        var_name="Metric",
+                        value_name="Count",
+                    )
+                )
+                .mark_line(point=True)
+                .encode(
+                    x=alt.X(
+                        "Period:N",
+                        sort=display_frame["Period"].tolist(),
+                        title=period_column,
+                        axis=alt.Axis(labelAngle=-35),
+                    ),
+                    y=alt.Y("Count:Q", title="Count", scale=alt.Scale(zero=True)),
+                    color=alt.Color("Metric:N"),
+                    tooltip=[
+                        alt.Tooltip("Period:N", title=period_column),
+                        alt.Tooltip("Metric:N"),
+                        alt.Tooltip("Count:Q", format=",d"),
+                    ],
+                )
+            )
+            st.altair_chart(volume_chart, use_container_width=True)
+
+            st.subheader(f"{label} Rate Trend")
+            rate_chart = (
+                alt.Chart(
+                    display_frame.melt(
+                        id_vars=["Period", "period_sort"],
+                        value_vars=["open_rate", "ctr", "click_to_open_rate"],
+                        var_name="Metric",
+                        value_name="Rate",
+                    )
+                )
+                .mark_line(point=True)
+                .encode(
+                    x=alt.X(
+                        "Period:N",
+                        sort=display_frame["Period"].tolist(),
+                        title=period_column,
+                        axis=alt.Axis(labelAngle=-35),
+                    ),
+                    y=alt.Y(
+                        "Rate:Q",
+                        axis=alt.Axis(format=".2%"),
+                        title="Rate",
+                        scale=alt.Scale(zero=True),
+                    ),
+                    color=alt.Color("Metric:N"),
+                    tooltip=[
+                        alt.Tooltip("Period:N", title=period_column),
+                        alt.Tooltip("Metric:N"),
+                        alt.Tooltip("Rate:Q", format=".2%"),
+                    ],
+                )
+            )
+            st.altair_chart(rate_chart, use_container_width=True)
 
 with tab_links:
     st.subheader("Top Clicked Links")
@@ -699,10 +834,6 @@ with tab_links:
             .reset_index()
             .sort_values("clicks", ascending=False)
         )
-        link_summary["position"] = pd.to_numeric(
-            link_summary["position"],
-            errors="coerce",
-        )
         positioned = link_summary.dropna(subset=["position"]).copy()
         if not positioned.empty:
             positioned["position"] = positioned["position"].astype(int)
@@ -713,10 +844,28 @@ with tab_links:
                 .sort_values("position")
             )
             st.subheader("Clicks by Email Position")
-            st.bar_chart(position_summary.set_index("position")[["clicks"]])
+            position_chart = (
+                alt.Chart(position_summary)
+                .mark_bar()
+                .encode(
+                    x=alt.X("position:O", sort=position_summary["position"].tolist(), title="Position"),
+                    y=alt.Y("clicks:Q", title="Total Clicks", scale=alt.Scale(zero=True)),
+                    tooltip=[
+                        alt.Tooltip("position:O", title="Position"),
+                        alt.Tooltip("clicks:Q", title="Total Clicks", format=",d"),
+                    ],
+                )
+            )
+            st.altair_chart(position_chart, use_container_width=True)
 
+        link_display = link_summary.copy()
+        link_display["article_or_site"] = link_display["article_or_site"].map(
+            lambda value: truncate_text(value, 70)
+        )
+        link_display["title"] = link_display["title"].map(lambda value: truncate_text(value, 95))
+        link_display["blurb"] = link_display["blurb"].map(lambda value: truncate_text(value, 120))
         st.dataframe(
-            link_summary.rename(
+            link_display.rename(
                 columns={
                     "article_or_site": "Article / Site",
                     "title": "Title",
@@ -729,8 +878,11 @@ with tab_links:
             use_container_width=True,
             hide_index=True,
             column_config={
+                "Article / Site": st.column_config.TextColumn("Article / Site", width="medium"),
+                "Title": st.column_config.TextColumn("Title", width="large"),
+                "Blurb": st.column_config.TextColumn("Blurb", width="large"),
                 "Link": st.column_config.LinkColumn("Link"),
-                "Position": st.column_config.NumberColumn("Position", format="%d"),
+                "Position": st.column_config.NumberColumn("Position", format="%d", width="small"),
                 "Total Clicks": st.column_config.NumberColumn("Total Clicks", format="%d"),
             },
         )
@@ -818,6 +970,7 @@ with tab_keywords:
                 on_select="rerun",
                 selection_mode="single-row",
                 column_config={
+                    "Keyword": st.column_config.TextColumn("Keyword", width="medium"),
                     "Total Clicks": st.column_config.NumberColumn("Total Clicks", format="%d"),
                     "Average Clicks": st.column_config.NumberColumn("Average Clicks", format="%.1f"),
                     "Median Clicks": st.column_config.NumberColumn("Median Clicks", format="%.1f"),
@@ -863,8 +1016,15 @@ with tab_keywords:
                     )
                 )
                 st.altair_chart(chart, use_container_width=True)
+                distribution_display = distribution.copy()
+                distribution_display["article_or_site"] = distribution_display["article_or_site"].map(
+                    lambda value: truncate_text(value, 90)
+                )
+                distribution_display["title"] = distribution_display["title"].map(
+                    lambda value: truncate_text(value, 110)
+                )
                 st.dataframe(
-                    distribution.rename(
+                    distribution_display.rename(
                         columns={
                             "article_or_site": "Article / Site",
                             "title": "Title",
@@ -875,8 +1035,10 @@ with tab_keywords:
                     use_container_width=True,
                     hide_index=True,
                     column_config={
-                        "Link": st.column_config.LinkColumn("Link"),
-                        "Clicks": st.column_config.NumberColumn("Clicks", format="%d"),
+                        "Article / Site": st.column_config.TextColumn("Article / Site", width="large"),
+                        "Title": st.column_config.TextColumn("Title", width="large"),
+                        "Link": st.column_config.LinkColumn("Link", width="medium"),
+                        "Clicks": st.column_config.NumberColumn("Clicks", format="%d", width="small"),
                     },
                 )
 
@@ -916,6 +1078,7 @@ with tab_keywords:
             use_container_width=True,
             hide_index=True,
             column_config={
+                "Keyword": st.column_config.TextColumn("Keyword", width="medium"),
                 "Open Rate": st.column_config.NumberColumn("Open Rate", format="%.2f%%"),
                 "Emails": st.column_config.NumberColumn("Emails", format="%d"),
                 "Delivered": st.column_config.NumberColumn("Delivered", format="%d"),
@@ -939,8 +1102,50 @@ with tab_detail:
         "click_to_open_rate",
         "web_version_url",
     ]
+    detail_display = filtered[display_columns].sort_values("send_date", ascending=False).copy()
+    detail_display["send_date"] = detail_display["send_date"].dt.strftime("%Y-%m-%d")
+    detail_display["preview_text"] = detail_display["preview_text"].map(
+        lambda value: truncate_text(value, 140)
+    )
+    detail_display["subject"] = detail_display["subject"].map(lambda value: truncate_text(value, 100))
+    for column in ["ctr", "open_rate", "click_to_open_rate"]:
+        if column in detail_display.columns:
+            detail_display[column] = pd.to_numeric(detail_display[column], errors="coerce").fillna(0) * 100
     st.dataframe(
-        filtered[display_columns].sort_values("send_date", ascending=False),
+        detail_display.rename(
+            columns={
+                "send_date": "Send Date",
+                "email_type": "Type",
+                "email_name": "Email",
+                "subject": "Subject",
+                "preview_text": "Preview Text",
+                "delivered": "Delivered",
+                "opens": "Opens",
+                "clicks": "Clicks",
+                "ctr": "CTR",
+                "open_rate": "Open Rate",
+                "click_to_open_rate": "Click-to-Open",
+                "web_version_url": "Web Version",
+            }
+        ),
         use_container_width=True,
         hide_index=True,
+        column_config={
+            "Send Date": st.column_config.TextColumn("Send Date", width="small"),
+            "Type": st.column_config.TextColumn("Type", width="small"),
+            "Email": st.column_config.TextColumn("Email", width="medium"),
+            "Subject": st.column_config.TextColumn("Subject", width="large"),
+            "Preview Text": st.column_config.TextColumn("Preview Text", width="large"),
+            "Delivered": st.column_config.NumberColumn("Delivered", format="%d", width="small"),
+            "Opens": st.column_config.NumberColumn("Opens", format="%d", width="small"),
+            "Clicks": st.column_config.NumberColumn("Clicks", format="%d", width="small"),
+            "CTR": st.column_config.NumberColumn("CTR", format="%.2f%%", width="small"),
+            "Open Rate": st.column_config.NumberColumn("Open Rate", format="%.2f%%", width="small"),
+            "Click-to-Open": st.column_config.NumberColumn(
+                "Click-to-Open",
+                format="%.2f%%",
+                width="small",
+            ),
+            "Web Version": st.column_config.LinkColumn("Web Version", width="medium"),
+        },
     )
