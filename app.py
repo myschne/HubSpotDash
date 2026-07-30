@@ -8,6 +8,8 @@ import pandas as pd
 import streamlit as st
 
 from src.cache_store import (
+    CACHE_FILE,
+    LINK_CACHE_FILE,
     CacheStatus,
     load_cached_emails,
     load_cached_link_clicks,
@@ -57,8 +59,19 @@ def default_date_range(period_label: str) -> tuple[date, date]:
     return end_date - timedelta(days=days - 1), end_date
 
 
+def cache_file_version(path) -> tuple[bool, int, int]:
+    if not path.exists():
+        return False, 0, 0
+    stat = path.stat()
+    return True, int(stat.st_mtime), int(stat.st_size)
+
+
 @st.cache_data(show_spinner=False)
-def cached_frame(cache_buster: int) -> tuple[pd.DataFrame, pd.DataFrame, CacheStatus]:
+def cached_frame(
+    cache_buster: int,
+    email_cache_version: tuple[bool, int, int],
+    link_cache_version: tuple[bool, int, int],
+) -> tuple[pd.DataFrame, pd.DataFrame, CacheStatus]:
     return (
         load_cached_emails(),
         load_cached_link_clicks(),
@@ -377,7 +390,11 @@ if not settings.token_options():
     )
 
 cache_buster = st.session_state.get("cache_buster", 0)
-frame, link_frame, cache_status = cached_frame(cache_buster)
+frame, link_frame, cache_status = cached_frame(
+    cache_buster,
+    cache_file_version(CACHE_FILE),
+    cache_file_version(LINK_CACHE_FILE),
+)
 
 if refresh:
     if not settings.token_options():

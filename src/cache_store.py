@@ -6,7 +6,8 @@ from pathlib import Path
 import pandas as pd
 
 
-CACHE_DIR = Path("data") / "cache"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+CACHE_DIR = PROJECT_ROOT / "data" / "cache"
 CACHE_FILE = CACHE_DIR / "hubspot_emails.csv"
 LINK_CACHE_FILE = CACHE_DIR / "hubspot_link_clicks.csv"
 
