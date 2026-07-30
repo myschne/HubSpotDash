@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import altair as alt
 import pandas as pd
@@ -15,7 +15,9 @@ from src.cache_store import (
     load_cached_link_clicks,
     merge_cached_emails,
     merge_cached_link_clicks,
+    append_google_cache_row,
     save_cached_emails,
+    save_google_cache_sheet,
     save_cached_link_clicks,
 )
 from src.config import HubSpotSettings, load_settings
@@ -23,12 +25,14 @@ from src.email_content import canonical_url, link_metadata
 from src.email_classifier import EMAIL_TYPES, classify_email
 from src.hubspot_client import HubSpotClient, HubSpotClientError
 from src.keywords import (
+    article_key,
     click_distribution_histogram,
     is_advanced_manufacturing_link,
     keyword_article_distribution,
     keyword_clicks,
     preview_keyword_open_rates,
 )
+from src.google_sheets_cache import missing_config
 from src.link_names import article_or_site_name
 from src.metrics import add_derived_metrics, summarize_metrics
 
@@ -66,15 +70,28 @@ def cache_file_version(path) -> tuple[bool, int, int]:
     return True, int(stat.st_mtime), int(stat.st_size)
 
 
+def google_cache_version(settings: HubSpotSettings) -> tuple[bool, str, str, str]:
+    cache = settings.google_cache
+    if not cache:
+        return False, "", "", ""
+    return (
+        cache.enabled,
+        cache.spreadsheet_id,
+        cache.emails_worksheet,
+        cache.links_worksheet,
+    )
+
+
 @st.cache_data(show_spinner=False)
 def cached_frame(
     cache_buster: int,
     email_cache_version: tuple[bool, int, int],
     link_cache_version: tuple[bool, int, int],
+    sheets_cache_version: tuple[bool, str, str, str],
 ) -> tuple[pd.DataFrame, pd.DataFrame, CacheStatus]:
     return (
-        load_cached_emails(),
-        load_cached_link_clicks(),
+        load_cached_emails(google_cache=settings.google_cache),
+        load_cached_link_clicks(google_cache=settings.google_cache),
         CacheStatus.from_cache_buster(cache_buster),
     )
 
@@ -196,10 +213,155 @@ def fetch_live_data(
     link_frame = pd.DataFrame(link_rows)
     if not link_frame.empty and "link" in link_frame.columns:
         link_frame["article_or_site"] = link_frame["link"].map(article_or_site_name)
-    save_cached_emails(frame)
-    save_cached_link_clicks(link_frame)
+    save_cached_emails(frame, google_cache=settings.google_cache)
+    save_cached_link_clicks(link_frame, google_cache=settings.google_cache)
     warnings = sorted(set(client.event_warnings + client.detail_warnings))
+    save_enriched_google_cache(
+        settings,
+        frame,
+        link_frame,
+        start_date,
+        end_date,
+        selected_email_types,
+        refresh_mode,
+        len(new_rows),
+        len(new_link_rows),
+        warnings,
+    )
     return frame, link_frame, token_label, warnings
+
+
+def save_enriched_google_cache(
+    settings: HubSpotSettings,
+    email_frame: pd.DataFrame,
+    link_frame: pd.DataFrame,
+    start_date: date,
+    end_date: date,
+    selected_email_types: list[str],
+    refresh_mode: str,
+    refreshed_email_rows: int,
+    refreshed_link_rows: int,
+    warnings: list[str],
+) -> None:
+    google_cache = settings.google_cache
+    if not google_cache or not google_cache.enabled or not google_cache.spreadsheet_id:
+        return
+
+    email_metadata = build_email_metadata(email_frame)
+    article_metadata = build_article_metadata(link_frame)
+    keyword_cache = build_keyword_summary_cache(email_frame, link_frame)
+
+    save_google_cache_sheet(email_metadata, google_cache, "email_metadata", ["email_id"])
+    save_google_cache_sheet(article_metadata, google_cache, "article_metadata", ["article_key"])
+    save_google_cache_sheet(keyword_cache, google_cache, "keyword_summary", ["Keyword"])
+    append_google_cache_row(
+        {
+            "refreshed_at": datetime.now().isoformat(timespec="seconds"),
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+            "email_types": ", ".join(selected_email_types),
+            "refresh_mode": refresh_mode,
+            "email_cache_rows": len(email_frame),
+            "link_cache_rows": len(link_frame),
+            "refreshed_email_rows": refreshed_email_rows,
+            "refreshed_link_rows": refreshed_link_rows,
+            "warnings": " | ".join(warnings[:5]),
+        },
+        google_cache,
+        "refresh_log",
+    )
+
+
+def build_email_metadata(email_frame: pd.DataFrame) -> pd.DataFrame:
+    if email_frame.empty:
+        return pd.DataFrame()
+    columns = [
+        "email_id",
+        "send_date",
+        "email_type",
+        "email_name",
+        "subject",
+        "preview_text",
+        "delivered",
+        "opens",
+        "clicks",
+        "open_rate",
+        "ctr",
+        "click_to_open_rate",
+        "web_version_url",
+    ]
+    available = [column for column in columns if column in email_frame.columns]
+    return (
+        email_frame[available]
+        .drop_duplicates(subset=["email_id"], keep="last")
+        .sort_values("send_date", ascending=False)
+        .reset_index(drop=True)
+    )
+
+
+def build_article_metadata(link_frame: pd.DataFrame) -> pd.DataFrame:
+    if link_frame.empty or "link" not in link_frame.columns:
+        return pd.DataFrame()
+
+    articles = link_frame.copy()
+    for column in ["article_or_site", "title", "blurb", "email_id", "send_date"]:
+        if column not in articles.columns:
+            articles[column] = ""
+    articles["canonical_url"] = articles["link"].map(canonical_url)
+    articles["article_key"] = articles["link"].map(article_key)
+    articles["is_advanced_manufacturing"] = articles["link"].map(is_advanced_manufacturing_link)
+    articles["clicks"] = pd.to_numeric(articles.get("clicks", 0), errors="coerce").fillna(0).astype(int)
+    if "send_date" in articles.columns:
+        articles["send_date"] = pd.to_datetime(articles["send_date"], errors="coerce")
+
+    grouped = (
+        articles.groupby("article_key", dropna=False)
+        .agg(
+            article_or_site=("article_or_site", "first"),
+            title=("title", "first"),
+            blurb=("blurb", "first"),
+            canonical_url=("canonical_url", "first"),
+            is_advanced_manufacturing=("is_advanced_manufacturing", "max"),
+            first_seen=("send_date", "min"),
+            last_seen=("send_date", "max"),
+            emails=("email_id", "nunique"),
+            total_clicks=("clicks", "sum"),
+        )
+        .reset_index()
+        .sort_values("total_clicks", ascending=False)
+    )
+    for column in ["first_seen", "last_seen"]:
+        grouped[column] = grouped[column].dt.date.astype(str).replace("NaT", "")
+    return grouped
+
+
+def build_keyword_summary_cache(email_frame: pd.DataFrame, link_frame: pd.DataFrame) -> pd.DataFrame:
+    if email_frame.empty or link_frame.empty or "email_id" not in link_frame.columns:
+        return pd.DataFrame()
+
+    keyword_links = link_frame.copy()
+    if "delivered" not in keyword_links.columns and "email_id" in email_frame.columns:
+        keyword_links = keyword_links.merge(
+            email_frame[["email_id", "delivered"]].drop_duplicates("email_id"),
+            on="email_id",
+            how="left",
+        )
+    summary = keyword_clicks(keyword_links, max_keywords=100)
+    if summary.empty:
+        return summary
+    summary = summary.copy()
+    summary["ctr"] = summary["ctr"] * 100
+    return summary.rename(
+        columns={
+            "keyword": "Keyword",
+            "clicks": "Total Clicks",
+            "average_clicks": "Average Clicks",
+            "median_clicks": "Median Clicks",
+            "links": "Linked Articles",
+            "delivered": "Delivered",
+            "ctr": "CTR",
+        }
+    )
 
 
 def build_email_records(
@@ -355,13 +517,21 @@ with st.sidebar:
     st.header("Controls")
     period_label = st.selectbox(
         "Period",
-        ["Last 7 days", "Last 30 days", "Last 90 days", "Year to date"],
+        ["Last 7 days", "Last 30 days", "Last 90 days", "Year to date", "Custom"],
         index=1,
     )
-    start_date, end_date = default_date_range(period_label)
-    selected_dates = st.date_input("Date range", value=(start_date, end_date))
-    if isinstance(selected_dates, tuple) and len(selected_dates) == 2:
-        start_date, end_date = selected_dates
+    if period_label == "Custom":
+        start_date, end_date = default_date_range("Last 30 days")
+        selected_dates = st.date_input("Date range", value=(start_date, end_date))
+        if isinstance(selected_dates, tuple) and len(selected_dates) == 2:
+            start_date, end_date = selected_dates
+    else:
+        start_date, end_date = default_date_range(period_label)
+        st.text_input(
+            "Date range",
+            value=f"{start_date:%Y/%m/%d} - {end_date:%Y/%m/%d}",
+            disabled=True,
+        )
 
     selected_types = st.multiselect(
         "Email type",
@@ -382,6 +552,13 @@ with st.sidebar:
     st.divider()
     refresh = st.button("Refresh from HubSpot", type="primary", use_container_width=True)
     use_cache = st.checkbox("Use local cache when available", value=True)
+    if settings.google_cache and settings.google_cache.enabled and settings.google_cache.spreadsheet_id:
+        st.caption("Cache: Google Sheets + CSV fallback")
+    else:
+        st.caption("Cache: CSV fallback")
+        missing_google_cache = missing_config(settings.google_cache)
+        if missing_google_cache:
+            st.caption("Missing Sheets config: " + ", ".join(missing_google_cache))
 
 if not settings.token_options():
     st.warning(
@@ -394,6 +571,7 @@ frame, link_frame, cache_status = cached_frame(
     cache_buster,
     cache_file_version(CACHE_FILE),
     cache_file_version(LINK_CACHE_FILE),
+    google_cache_version(settings),
 )
 
 if refresh:
@@ -434,7 +612,7 @@ if frame.empty:
     st.info("No cached HubSpot email data yet. Use the refresh button after adding a token.")
     st.stop()
 
-frame = frame.copy()
+frame = add_derived_metrics(frame)
 if "preview_text" not in frame.columns:
     frame["preview_text"] = ""
 frame["send_date"] = pd.to_datetime(frame["send_date"], errors="coerce")
@@ -468,12 +646,13 @@ else:
 
 summary = summarize_metrics(filtered)
 
-metric_cols = st.columns(5)
+metric_cols = st.columns(6)
 metric_cols[0].metric("Delivered", f"{summary['delivered']:,}")
 metric_cols[1].metric("Opens", f"{summary['opens']:,}")
 metric_cols[2].metric("Open Rate", f"{summary['open_rate']:.2%}")
 metric_cols[3].metric("CTR", f"{summary['ctr']:.2%}")
-metric_cols[4].metric("Emails", f"{summary['emails']:,}")
+metric_cols[4].metric("Click-to-Open", f"{summary['click_to_open_rate']:.2%}")
+metric_cols[5].metric("Emails", f"{summary['emails']:,}")
 
 tab_overview, tab_trends, tab_links, tab_keywords, tab_detail = st.tabs(
     ["Overview", "Trends", "Clicked Links", "Keywords", "Email Detail"]
@@ -757,6 +936,7 @@ with tab_detail:
         "clicks",
         "ctr",
         "open_rate",
+        "click_to_open_rate",
         "web_version_url",
     ]
     st.dataframe(

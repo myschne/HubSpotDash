@@ -1,5 +1,6 @@
 .env
 .streamlit/secrets.toml
+stable-hologram-497015-i9-45282bfa717e.json
 __pycache__/
 *.py[cod]
 .pytest_cache/
