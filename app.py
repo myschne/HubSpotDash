@@ -560,6 +560,13 @@ with tab_keywords:
         if keyword_summary.empty:
             st.info("No Advanced Manufacturing keyword data is available for the selected period.")
         else:
+            if "delivered" not in keyword_summary.columns:
+                keyword_summary["delivered"] = 0
+            if "ctr" not in keyword_summary.columns:
+                keyword_summary["ctr"] = (
+                    keyword_summary["clicks"]
+                    / pd.to_numeric(keyword_summary["delivered"], errors="coerce").replace(0, pd.NA)
+                ).fillna(0)
             keyword_chart_left, keyword_chart_right = st.columns(2)
             with keyword_chart_left:
                 st.subheader("Keyword Clicks")
