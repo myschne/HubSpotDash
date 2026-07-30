@@ -1,6 +1,5 @@
 .env
 .streamlit/secrets.toml
-data/cache/
 __pycache__/
 *.py[cod]
 .pytest_cache/
