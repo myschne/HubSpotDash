@@ -34,6 +34,7 @@ from src.keywords import (
     preview_keyword_open_rates,
 )
 from src.google_sheets_cache import missing_config
+from src.google_sheets_cache import load_worksheet
 from src.link_names import article_or_site_name
 from src.metrics import add_derived_metrics, summarize_metrics
 
@@ -44,6 +45,13 @@ REFRESH_MODES = [
     "Fast summary only",
     "Clicked links only",
 ]
+
+REFRESH_MODE_LABELS = {
+    "Incremental refresh": "Incremental refresh (recommended)",
+    "Full refresh": "Full refresh (slow)",
+    "Fast summary only": "Fast summary only",
+    "Clicked links only": "Clicked links only",
+}
 
 
 st.set_page_config(
@@ -109,6 +117,23 @@ def google_cache_version(settings: HubSpotSettings) -> tuple[bool, str, str, str
         cache.emails_worksheet,
         cache.links_worksheet,
     )
+
+
+@st.cache_data(show_spinner=False, ttl=60)
+def last_refresh_text(sheets_cache_version: tuple[bool, str, str, str]) -> str:
+    if not sheets_cache_version[0]:
+        return "No Google Sheets refresh log"
+    try:
+        refresh_log = load_worksheet(settings.google_cache, "refresh_log")
+    except Exception:
+        return "Refresh log unavailable"
+    if refresh_log is None or refresh_log.empty or "refreshed_at" not in refresh_log.columns:
+        return "No refresh logged yet"
+
+    refreshed_at = pd.to_datetime(refresh_log["refreshed_at"], errors="coerce").dropna()
+    if refreshed_at.empty:
+        return "No refresh logged yet"
+    return refreshed_at.max().strftime("%Y-%m-%d %I:%M %p")
 
 
 @st.cache_data(show_spinner=False)
@@ -557,6 +582,7 @@ def grouped_cached_rows(frame: pd.DataFrame, id_column: str) -> dict[str, list[d
 st.title("HubSpot Email Performance")
 
 settings = load_settings()
+sheets_cache_version = google_cache_version(settings)
 
 with st.sidebar:
     st.header("Controls")
@@ -588,6 +614,7 @@ with st.sidebar:
         "Refresh mode",
         REFRESH_MODES,
         index=0,
+        format_func=lambda mode: REFRESH_MODE_LABELS.get(mode, mode),
         help=(
             "Incremental reuses cached email/link rows. Full recalculates the selected period. "
             "Fast summary skips event/link calls. Clicked links only preserves cached KPI rows."
@@ -595,6 +622,7 @@ with st.sidebar:
     )
 
     st.divider()
+    st.caption(f"Last refresh: {last_refresh_text(sheets_cache_version)}")
     refresh = st.button("Refresh from HubSpot", type="primary", use_container_width=True)
     use_cache = st.checkbox("Use local cache when available", value=True)
     if settings.google_cache and settings.google_cache.enabled and settings.google_cache.spreadsheet_id:
@@ -604,6 +632,12 @@ with st.sidebar:
         missing_google_cache = missing_config(settings.google_cache)
         if missing_google_cache:
             st.caption("Missing Sheets config: " + ", ".join(missing_google_cache))
+    st.caption(
+        "Refresh guidance: past data is saved after every refresh. Refresh only when new "
+        "HubSpot data needs to be pulled. Use 7 days, or the shortest useful period, unless "
+        "older emails may have updated stats. Email stats are all-time totals for emails sent "
+        "inside the selected date range."
+    )
 
 if not settings.token_options():
     st.warning(
@@ -616,7 +650,7 @@ frame, link_frame, cache_status = cached_frame(
     cache_buster,
     cache_file_version(CACHE_FILE),
     cache_file_version(LINK_CACHE_FILE),
-    google_cache_version(settings),
+    sheets_cache_version,
 )
 
 if refresh:
