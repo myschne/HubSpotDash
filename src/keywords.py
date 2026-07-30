@@ -57,7 +57,9 @@ def is_advanced_manufacturing_link(url: str) -> bool:
 
 def keyword_clicks(link_frame: pd.DataFrame, max_keywords: int = 25) -> pd.DataFrame:
     if link_frame.empty:
-        return pd.DataFrame(columns=["keyword", "clicks", "links"])
+        return pd.DataFrame(
+            columns=["keyword", "clicks", "average_clicks", "median_clicks", "links", "delivered", "ctr"]
+        )
 
     rows = []
     for row in link_frame.to_dict(orient="records"):
@@ -68,23 +70,32 @@ def keyword_clicks(link_frame: pd.DataFrame, max_keywords: int = 25) -> pd.DataF
             for column in ["title", "blurb", "article_or_site"]
         )
         clicks = int(float(row.get("clicks", 0) or 0))
+        delivered = int(float(row.get("delivered", 0) or 0))
         for keyword in extract_keywords(text):
             rows.append(
                 {
                     "keyword": keyword,
                     "clicks": clicks,
+                    "delivered": delivered,
+                    "email_id": row.get("email_id", ""),
                     "link": row.get("link", ""),
                     "article_key": article_key(row.get("link", "")),
                 }
             )
 
     if not rows:
-        return pd.DataFrame(columns=["keyword", "clicks", "links"])
+        return pd.DataFrame(
+            columns=["keyword", "clicks", "average_clicks", "median_clicks", "links", "delivered", "ctr"]
+        )
 
     frame = (
         pd.DataFrame(rows)
-        .groupby(["keyword", "article_key"], dropna=False)
-        .agg(clicks=("clicks", "sum"), link=("link", "first"))
+        .groupby(["keyword", "email_id", "article_key"], dropna=False)
+        .agg(
+            clicks=("clicks", "sum"),
+            delivered=("delivered", "first"),
+            link=("link", "first"),
+        )
         .reset_index()
     )
     summary = (
@@ -94,12 +105,16 @@ def keyword_clicks(link_frame: pd.DataFrame, max_keywords: int = 25) -> pd.DataF
             average_clicks=("clicks", "mean"),
             median_clicks=("clicks", "median"),
             links=("article_key", "nunique"),
+            delivered=("delivered", "sum"),
         )
         .reset_index()
+    )
+    summary["ctr"] = summary["clicks"] / summary["delivered"].replace(0, pd.NA)
+    return (
+        summary.assign(ctr=lambda data: data["ctr"].fillna(0))
         .sort_values(["clicks", "links"], ascending=False)
         .head(max_keywords)
     )
-    return summary
 
 
 def keyword_article_distribution(link_frame: pd.DataFrame, keyword: str) -> pd.DataFrame:

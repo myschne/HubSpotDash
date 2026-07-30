@@ -544,18 +544,67 @@ with tab_keywords:
     if filtered_links.empty:
         st.info("No clicked-link data is cached yet. Refresh from HubSpot to collect keyword data.")
     else:
-        keyword_summary = keyword_clicks(filtered_links)
+        keyword_links = filtered_links.copy()
+        if (
+            "email_id" in keyword_links.columns
+            and "delivered" not in keyword_links.columns
+            and "email_id" in filtered.columns
+            and "delivered" in filtered.columns
+        ):
+            keyword_links = keyword_links.merge(
+                filtered[["email_id", "delivered"]].drop_duplicates("email_id"),
+                on="email_id",
+                how="left",
+            )
+        keyword_summary = keyword_clicks(keyword_links)
         if keyword_summary.empty:
             st.info("No Advanced Manufacturing keyword data is available for the selected period.")
         else:
-            st.bar_chart(keyword_summary.set_index("keyword")[["clicks"]])
-            keyword_display = keyword_summary.rename(
+            keyword_chart_left, keyword_chart_right = st.columns(2)
+            with keyword_chart_left:
+                st.subheader("Keyword Clicks")
+                clicks_chart = (
+                    alt.Chart(keyword_summary)
+                    .mark_bar()
+                    .encode(
+                        x=alt.X("keyword:N", sort="-y", title="Keyword"),
+                        y=alt.Y("clicks:Q", title="Total Clicks"),
+                        tooltip=[
+                            alt.Tooltip("keyword:N", title="Keyword"),
+                            alt.Tooltip("clicks:Q", title="Total Clicks", format=",d"),
+                            alt.Tooltip("links:Q", title="Linked Articles", format=",d"),
+                        ],
+                    )
+                )
+                st.altair_chart(clicks_chart, use_container_width=True)
+            with keyword_chart_right:
+                st.subheader("Keyword CTR")
+                ctr_chart = (
+                    alt.Chart(keyword_summary)
+                    .mark_bar()
+                    .encode(
+                        x=alt.X("keyword:N", sort="-y", title="Keyword"),
+                        y=alt.Y("ctr:Q", axis=alt.Axis(format=".2%"), title="CTR"),
+                        tooltip=[
+                            alt.Tooltip("keyword:N", title="Keyword"),
+                            alt.Tooltip("ctr:Q", title="CTR", format=".2%"),
+                            alt.Tooltip("clicks:Q", title="Total Clicks", format=",d"),
+                            alt.Tooltip("delivered:Q", title="Delivered", format=",d"),
+                        ],
+                    )
+                )
+                st.altair_chart(ctr_chart, use_container_width=True)
+            keyword_display = keyword_summary.copy()
+            keyword_display["ctr"] = keyword_display["ctr"] * 100
+            keyword_display = keyword_display.rename(
                 columns={
                     "keyword": "Keyword",
                     "clicks": "Total Clicks",
                     "average_clicks": "Average Clicks",
                     "median_clicks": "Median Clicks",
                     "links": "Linked Articles",
+                    "delivered": "Delivered",
+                    "ctr": "CTR",
                 }
             )
             keyword_event = st.dataframe(
@@ -570,6 +619,8 @@ with tab_keywords:
                     "Average Clicks": st.column_config.NumberColumn("Average Clicks", format="%.1f"),
                     "Median Clicks": st.column_config.NumberColumn("Median Clicks", format="%.1f"),
                     "Linked Articles": st.column_config.NumberColumn("Linked Articles", format="%d"),
+                    "Delivered": st.column_config.NumberColumn("Delivered", format="%d"),
+                    "CTR": st.column_config.NumberColumn("CTR", format="%.2f%%"),
                 },
             )
             selected_keyword = ""
@@ -595,7 +646,7 @@ with tab_keywords:
                 key="keyword_distribution_select",
             )
             selected_keyword = fallback_keyword
-            distribution = keyword_article_distribution(filtered_links, selected_keyword)
+            distribution = keyword_article_distribution(keyword_links, selected_keyword)
             if not distribution.empty:
                 st.subheader(f"Clicks Distribution for '{selected_keyword}'")
                 histogram = click_distribution_histogram(distribution)
@@ -631,9 +682,22 @@ with tab_keywords:
     if preview_summary.empty:
         st.info("No preview text keyword data is available for the selected period.")
     else:
-        chart_frame = preview_summary.copy()
-        chart_frame["open_rate_pct"] = chart_frame["open_rate"] * 100
-        st.bar_chart(chart_frame.set_index("keyword")[["open_rate_pct"]])
+        preview_chart = (
+            alt.Chart(preview_summary)
+            .mark_bar()
+            .encode(
+                x=alt.X("keyword:N", sort="-y", title="Keyword"),
+                y=alt.Y("open_rate:Q", axis=alt.Axis(format=".2%"), title="Open Rate"),
+                tooltip=[
+                    alt.Tooltip("keyword:N", title="Keyword"),
+                    alt.Tooltip("open_rate:Q", title="Open Rate", format=".2%"),
+                    alt.Tooltip("emails:Q", title="Emails", format=",d"),
+                    alt.Tooltip("delivered:Q", title="Delivered", format=",d"),
+                    alt.Tooltip("opens:Q", title="Opens", format=",d"),
+                ],
+            )
+        )
+        st.altair_chart(preview_chart, use_container_width=True)
         preview_display = preview_summary.copy()
         preview_display["open_rate"] = preview_display["open_rate"] * 100
         st.dataframe(
