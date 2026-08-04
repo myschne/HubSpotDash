@@ -10,9 +10,6 @@ def dedupe_email_rows(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def add_derived_metrics(frame: pd.DataFrame) -> pd.DataFrame:
-    if frame.empty:
-        return frame
-
     enriched = dedupe_email_rows(frame)
     for column in ["delivered", "opens", "clicks"]:
         if column not in enriched.columns:
