@@ -4,7 +4,7 @@ import re
 from typing import Any
 
 
-EMAIL_TYPES = ["Newsletter", "Advertising", "Digital Deployment", "Unclassified"]
+EMAIL_TYPES = ["Newsletter", "Webinars", "Advertising", "Digital Deployment", "Unclassified"]
 NEWSLETTER_PATTERN = re.compile(r"\bMW\s+\d{1,2}/\d{1,2}/\d{2}\b", re.IGNORECASE)
 CUSTOM_EMAIL_PATTERN = re.compile(r"\bcustom\s+email\b", re.IGNORECASE)
 
@@ -19,6 +19,8 @@ def classify_email(email: dict[str, Any]) -> str:
 
     if NEWSLETTER_PATTERN.search(name):
         return "Newsletter"
+    if "webinar" in normalized:
+        return "Webinars"
     if CUSTOM_EMAIL_PATTERN.search(name):
         return "Advertising"
     if "digital deployment" in normalized or "deployment" in normalized:

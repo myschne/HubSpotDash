@@ -607,7 +607,7 @@ with st.sidebar:
     selected_types = st.multiselect(
         "Email type",
         EMAIL_TYPES,
-        default=["Newsletter", "Advertising", "Digital Deployment", "Unclassified"],
+        default=["Newsletter", "Webinars", "Advertising", "Digital Deployment", "Unclassified"],
     )
 
     refresh_mode = st.selectbox(
