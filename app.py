@@ -99,7 +99,6 @@ def truncate_text(value: object, limit: int = 140) -> str:
         return text
     return text[: limit - 3].rstrip() + "..."
 
-
 def cache_file_version(path) -> tuple[bool, int, int]:
     if not path.exists():
         return False, 0, 0
@@ -903,7 +902,7 @@ with tab_links:
             lambda value: truncate_text(value, 70)
         )
         link_display["title"] = link_display["title"].map(lambda value: truncate_text(value, 95))
-        link_display["blurb"] = link_display["blurb"].map(lambda value: truncate_text(value, 120))
+        link_display["blurb"] = link_display["blurb"].map(lambda value: truncate_text(value, 95))
         st.dataframe(
             link_display.rename(
                 columns={
@@ -919,11 +918,11 @@ with tab_links:
             hide_index=True,
             column_config={
                 "Article / Site": st.column_config.TextColumn("Article / Site", width="medium"),
-                "Title": st.column_config.TextColumn("Title", width="large"),
-                "Blurb": st.column_config.TextColumn("Blurb", width="large"),
-                "Link": st.column_config.LinkColumn("Link"),
+                "Title": st.column_config.TextColumn("Title", width="medium"),
+                "Blurb": st.column_config.TextColumn("Blurb", width="medium"),
+                "Link": st.column_config.LinkColumn("Link", display_text="Open", width="small"),
                 "Position": st.column_config.NumberColumn("Position", format="%d", width="small"),
-                "Total Clicks": st.column_config.NumberColumn("Total Clicks", format="%d"),
+                "Total Clicks": st.column_config.NumberColumn("Total Clicks", format="%d", width="small"),
             },
         )
 
@@ -1011,7 +1010,7 @@ with tab_keywords:
                 selection_mode="single-row",
                 column_config={
                     "Keyword": st.column_config.TextColumn("Keyword", width="medium"),
-                    "Total Clicks": st.column_config.NumberColumn("Total Clicks", format="%d"),
+                    "Total Clicks": st.column_config.NumberColumn("Total Clicks", format="%d", width="small"),
                     "Average Clicks": st.column_config.NumberColumn("Average Clicks", format="%.1f"),
                     "Median Clicks": st.column_config.NumberColumn("Median Clicks", format="%.1f"),
                     "Linked Articles": st.column_config.NumberColumn("Linked Articles", format="%d"),
@@ -1076,7 +1075,7 @@ with tab_keywords:
                     hide_index=True,
                     column_config={
                         "Article / Site": st.column_config.TextColumn("Article / Site", width="large"),
-                        "Title": st.column_config.TextColumn("Title", width="large"),
+                        "Title": st.column_config.TextColumn("Title", width="medium"),
                         "Link": st.column_config.LinkColumn("Link", width="medium"),
                         "Clicks": st.column_config.NumberColumn("Clicks", format="%d", width="small"),
                     },
