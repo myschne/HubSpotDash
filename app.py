@@ -997,7 +997,7 @@ with tab_keywords:
                     "average_clicks": "Average Clicks",
                     "median_clicks": "Median Clicks",
                     "links": "Linked Articles",
-                    "delivered": "Delivered",
+                    "delivered": "Deliv.",
                     "ctr": "CTR",
                 }
             )
@@ -1014,7 +1014,7 @@ with tab_keywords:
                     "Average Clicks": st.column_config.NumberColumn("Average Clicks", format="%.1f"),
                     "Median Clicks": st.column_config.NumberColumn("Median Clicks", format="%.1f"),
                     "Linked Articles": st.column_config.NumberColumn("Linked Articles", format="%d"),
-                    "Delivered": st.column_config.NumberColumn("Delivered", format="%d"),
+                    "Deliv.": st.column_config.NumberColumn("Deliv.", format="%d"),
                     "CTR": st.column_config.NumberColumn("CTR", format="%.2f%%"),
                 },
             )
@@ -1108,9 +1108,9 @@ with tab_keywords:
             preview_display.rename(
                 columns={
                     "keyword": "Keyword",
-                    "open_rate": "Open Rate",
+                    "open_rate": "Open %",
                     "emails": "Emails",
-                    "delivered": "Delivered",
+                    "delivered": "Deliv.",
                     "opens": "Opens",
                 }
             ),
@@ -1118,9 +1118,9 @@ with tab_keywords:
             hide_index=True,
             column_config={
                 "Keyword": st.column_config.TextColumn("Keyword", width="medium"),
-                "Open Rate": st.column_config.NumberColumn("Open Rate", format="%.2f%%"),
+                "Open %": st.column_config.NumberColumn("Open %", format="%.2f%%"),
                 "Emails": st.column_config.NumberColumn("Emails", format="%d"),
-                "Delivered": st.column_config.NumberColumn("Delivered", format="%d"),
+                "Deliv.": st.column_config.NumberColumn("Deliv.", format="%d"),
                 "Opens": st.column_config.NumberColumn("Opens", format="%d"),
             },
         )
@@ -1144,9 +1144,9 @@ with tab_detail:
     detail_display = filtered[display_columns].sort_values("send_date", ascending=False).copy()
     detail_display["send_date"] = detail_display["send_date"].dt.strftime("%Y-%m-%d")
     detail_display["preview_text"] = detail_display["preview_text"].map(
-        lambda value: truncate_text(value, 140)
+        lambda value: truncate_text(value, 70)
     )
-    detail_display["subject"] = detail_display["subject"].map(lambda value: truncate_text(value, 100))
+    detail_display["subject"] = detail_display["subject"].map(lambda value: truncate_text(value, 75))
     for column in ["ctr", "open_rate", "click_to_open_rate"]:
         if column in detail_display.columns:
             detail_display[column] = pd.to_numeric(detail_display[column], errors="coerce").fillna(0) * 100
@@ -1158,13 +1158,13 @@ with tab_detail:
                 "email_name": "Email",
                 "subject": "Subject",
                 "preview_text": "Preview Text",
-                "delivered": "Delivered",
+                "delivered": "Deliv.",
                 "opens": "Opens",
                 "clicks": "Clicks",
                 "ctr": "CTR",
-                "open_rate": "Open Rate",
-                "click_to_open_rate": "Click-to-Open",
-                "web_version_url": "Web Version",
+                "open_rate": "Open %",
+                "click_to_open_rate": "CTO %",
+                "web_version_url": "Web",
             }
         ),
         use_container_width=True,
@@ -1172,19 +1172,15 @@ with tab_detail:
         column_config={
             "Send Date": st.column_config.TextColumn("Send Date", width="small"),
             "Type": st.column_config.TextColumn("Type", width="small"),
-            "Email": st.column_config.TextColumn("Email", width="medium"),
-            "Subject": st.column_config.TextColumn("Subject", width="large"),
-            "Preview Text": st.column_config.TextColumn("Preview Text", width="large"),
-            "Delivered": st.column_config.NumberColumn("Delivered", format="%d", width="small"),
+            "Email": st.column_config.TextColumn("Email", width="small"),
+            "Subject": st.column_config.TextColumn("Subject", width="medium"),
+            "Preview Text": st.column_config.TextColumn("Preview Text", width="medium"),
+            "Deliv.": st.column_config.NumberColumn("Deliv.", format="%d", width="small"),
             "Opens": st.column_config.NumberColumn("Opens", format="%d", width="small"),
             "Clicks": st.column_config.NumberColumn("Clicks", format="%d", width="small"),
             "CTR": st.column_config.NumberColumn("CTR", format="%.2f%%", width="small"),
-            "Open Rate": st.column_config.NumberColumn("Open Rate", format="%.2f%%", width="small"),
-            "Click-to-Open": st.column_config.NumberColumn(
-                "Click-to-Open",
-                format="%.2f%%",
-                width="small",
-            ),
-            "Web Version": st.column_config.LinkColumn("Web Version", width="medium"),
+            "Open %": st.column_config.NumberColumn("Open %", format="%.2f%%", width="small"),
+            "CTO %": st.column_config.NumberColumn("CTO %", format="%.2f%%", width="small"),
+            "Web": st.column_config.LinkColumn("Web", display_text="Open", width="small"),
         },
     )
