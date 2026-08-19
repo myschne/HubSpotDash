@@ -740,13 +740,14 @@ else:
 
 summary = summarize_metrics(filtered)
 
-metric_cols = st.columns(6)
+metric_cols = st.columns(7)
 metric_cols[0].metric("Delivered", f"{summary['delivered']:,}")
 metric_cols[1].metric("Opens", f"{summary['opens']:,}")
-metric_cols[2].metric("Open Rate", f"{summary['open_rate']:.2%}")
-metric_cols[3].metric("CTR", f"{summary['ctr']:.2%}")
-metric_cols[4].metric("Click-to-Open", f"{summary['click_to_open_rate']:.2%}")
-metric_cols[5].metric("Emails", f"{summary['emails']:,}")
+metric_cols[2].metric("Email Clicks", f"{summary['clicks']:,}")
+metric_cols[3].metric("Open Rate", f"{summary['open_rate']:.2%}")
+metric_cols[4].metric("CTR", f"{summary['ctr']:.2%}")
+metric_cols[5].metric("Click-to-Open", f"{summary['click_to_open_rate']:.2%}")
+metric_cols[6].metric("Emails", f"{summary['emails']:,}")
 
 tab_overview, tab_trends, tab_links, tab_keywords, tab_detail = st.tabs(
     ["Overview", "Trends", "Clicked Links", "Keywords", "Email Detail"]
