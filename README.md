@@ -24,32 +24,10 @@ Refreshing may take a few minutes. Do not repeatedly select the refresh button w
 ## How the data works
 
 - **HubSpot is the source of truth.** A refresh requests current marketing email data from the company HubSpot account.
-- **Google Sheets is the shared saved copy.** When configured, refreshed results are stored in a Google Sheet so the team can load them again without making a new HubSpot request.
+- **Google Sheets is the shared saved copy.** Refreshed results are stored in the [HubSpot dashboard data sheet](https://docs.google.com/spreadsheets/d/1IHIwO8fI2KG0_d8yuZ12Rai4QSjPcJ0_de7zLmuPZ4g/edit) so the team can load them again without making a new HubSpot request.
 - **CSV files are the backup copy.** Files in `data/cache/` are used if the Google Sheet is unavailable or has not been configured.
 - The **Last refresh** message in the left panel indicates when the saved data was last updated.
 - The dashboard groups emails using their names. Newsletters named like `MW m/d/yy` and advertising/custom emails named like `Company Custom Email` are recognized. Emails that do not match a known naming pattern may appear as **Unclassified**.
-
-## Routine ownership
-
-Assign these responsibilities before the current owner leaves:
-
-| Responsibility | Recommended owner |
-| --- | --- |
-| Use the dashboard and check results | Marketing operations |
-| Refresh the data | Marketing operations |
-| Maintain the HubSpot service key and permissions | HubSpot super admin or user with Developer Tools access |
-| Maintain dashboard hosting and secrets | IT or the person who administers the hosted dashboard |
-| Maintain the Google Sheet and Google service account | IT or Google Workspace administrator |
-| Investigate code errors or change dashboard behavior | Internal developer or outside technical support |
-
-Record the current names and contact information here during handoff:
-
-- Business owner: **[add name/contact]**
-- HubSpot administrator: **[add name/contact]**
-- Hosting/IT owner: **[add name/contact]**
-- Technical support contact: **[add name/contact]**
-- Dashboard link: **[add link]**
-- Shared Google Sheet: **[add link]**
 
 ## Troubleshooting
 
@@ -103,7 +81,7 @@ Before the current owner leaves, confirm that:
 - [ ] At least one remaining HubSpot administrator can view and manage the service key.
 - [ ] The HubSpot key has the permissions required to read marketing email data.
 - [ ] The hosting owner can access the dashboard's secret settings and deployment controls.
-- [ ] The shared Google Sheet URL has been added above and ownership is not dependent on the departing employee.
+- [ ] Ownership of the linked Google Sheet is not dependent on the departing employee.
 - [ ] The Google service account has access to the shared Google Sheet.
 - [ ] The new team has successfully opened, filtered, and refreshed the dashboard.
 - [ ] Credentials have been transferred through an approved password manager or secret-management process, not through email or chat.
